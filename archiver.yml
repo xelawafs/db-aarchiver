@@ -1,0 +1,63 @@
+---
+  # this playbook backups up archived RDS MySQL tables to an AWS S3 bucket,
+  - hosts: rds_mysql
+    user: "{{ssh_user}}"
+
+    vars_files:
+      - vars.yml
+
+    tasks:
+      - block:
+        - name: Copy bash script (used for executing a mysql dump of newly archived tables) to host
+          copy: src=files/sql.sh dest=/tmp/sql.sh
+
+        - name: Copy bash script (used for deleting all archived tables that have already been backed up on the S3 bucket) to host
+          copy: src=files/drop_table.sh dest=/tmp/drop_table.sh
+
+        - name: Create mysql dump for all selected prefixed table(s) on target db
+          command: "sh /tmp/sql.sh {{mysql_user}} {{mysql_password}} {{mysql_db}} {{archive_prefix}} {{ansible_date_time.date}}"
+          register: tables_to_archive
+        - debug: msg="{{ tables_to_archive.stdout }}"
+
+        - name: Backup MySQL dump to S3
+          s3: aws_access_key={{aws_access_key}} aws_secret_key={{aws_secret_key}} bucket={{bucket_name}} src=/tmp/{{mysql_db}}-{{archive_prefix}}-{{ansible_date_time.date}}.sql object={{mysql_db}}-{{archive_prefix}}-{{ansible_date_time.date}}.sql mode=put
+          when: tables_to_archive.stdout > '0'
+
+        - name: Delete archived tables that have already been backed up to S3 bucket
+          command: "sh /tmp/drop_table.sh {{mysql_user}} {{mysql_password}} {{mysql_db}} {{archive_prefix}} {{ansible_date_time.date}}"
+          register: tables_to_delete
+        - debug: msg="{{ tables_to_delete.stdout }}"
+          when: tables_to_archive.stdout > '0'
+
+        - name: Send success notifications to AWS SNS
+          local_action:
+            module: sns
+            msg: "{{tables_to_archive.stdout}} table(s) successfully backed up on your S3 bucket as: {{mysql_db}}-{{archive_prefix}}-{{ansible_date_time.date}}.sql "
+            subject: "SUCCESS: RDS MySQL Archive Backup for the {{mysql_db}} database"
+            topic: "{{sns_topic}}"
+            aws_access_key: "{{aws_access_key}}"
+            aws_secret_key: "{{aws_secret_key}}"
+            region: "us-west-2"
+          when: tables_to_archive.stdout > '0'
+
+        - name: Send no new tables to backup notifications to AWS SNS
+          local_action:
+            module: sns
+            msg: "There are no new tables with the {{archive_prefix}} prefix to backup"
+            subject: "NO NEW TABLES: RDS MySQL Archive Backup for the {{mysql_db}} database"
+            topic: "{{sns_topic}}"
+            aws_access_key: "{{aws_access_key}}"
+            aws_secret_key: "{{aws_secret_key}}"
+            region: "us-west-2"
+          when: tables_to_archive.stdout == '0'
+
+        rescue:
+          - name: Send failure notification to AWS SNS
+            local_action:
+              module: sns
+              msg: "Your archived table(s) backup has failed with the following error:\n\n\n {{ansible_failed_result}} "
+              subject: "FAILURE: RDS MySQL Archive Backup for the {{mysql_db}} database"
+              topic: "{{sns_topic}}"
+              aws_access_key: "{{aws_access_key}}"
+              aws_secret_key: "{{aws_secret_key}}"
+              region: "{{region}}"

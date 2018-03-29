@@ -1,0 +1,14 @@
+---
+  ssh_user: xxxx
+
+  mysql_user: xxxx
+  mysql_password: xxxx
+  mysql_db: xxxx
+  archive_prefix: ARCHIVE_
+
+  aws_access_key: xxxx
+  aws_secret_key: xxxx
+  bucket_name: xxxx
+  notification_email: xxxx
+  sns_topic: xxxx
+  region: xxxx
